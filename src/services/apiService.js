@@ -2,7 +2,6 @@ import { supabase } from '../supabaseClient.js'
 
 const NOTIFY_URL = import.meta.env.VITE_NOTIFICATION_FUNCTION_URL
 
-// Normalize Supabase snake_case → camelCase used by components
 function normalizeAction(a) {
   return {
     id:            a.id,
@@ -33,8 +32,18 @@ function normalizeRequest(r) {
   }
 }
 
-/** Get all requests for the current logged-in requester (RLS enforced by Supabase) */
+/** Get only the current user's own requests (RLS: requester_id = auth.uid()) */
 export async function getRequests() {
+  const { data, error } = await supabase
+    .from('requests')
+    .select('*, actions(*)')
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data || []).map(normalizeRequest)
+}
+
+/** Get ALL requests across all requesters — for the "All Requests" tab */
+export async function getAllRequests() {
   const { data, error } = await supabase
     .from('requests')
     .select('*, actions(*)')
@@ -53,12 +62,10 @@ export async function getRequest(id) {
   return normalizeRequest(data)
 }
 
-/** Submit a new approval request */
 export async function createRequest({ title, bodyMessage, approvers, approvalType }) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
 
-  // 1. Insert request
   const { data: request, error: reqErr } = await supabase
     .from('requests')
     .insert({
@@ -75,7 +82,6 @@ export async function createRequest({ title, bodyMessage, approvers, approvalTyp
 
   if (reqErr) throw new Error(reqErr.message)
 
-  // 2. Insert action rows for each approver
   const actionRows = approvers.map(a => ({
     request_id:     request.id,
     approver_email: a.email,
@@ -87,7 +93,6 @@ export async function createRequest({ title, bodyMessage, approvers, approvalTyp
   const { error: actErr } = await supabase.from('actions').insert(actionRows)
   if (actErr) throw new Error(actErr.message)
 
-  // 3. Trigger email notifications (fire-and-forget)
   fetch(NOTIFY_URL, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
