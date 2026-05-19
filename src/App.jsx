@@ -12,22 +12,32 @@ export default function App() {
   const [authError, setAuthError] = useState(null)
 
   useEffect(() => {
-    // Check for error in URL params (PKCE flow returns errors as query params)
-    const params = new URLSearchParams(window.location.search)
-    const errDesc = params.get('error_description') || params.get('error')
+    // Detect error query params from OAuth redirect
+    const url = new URL(window.location.href)
+    const errDesc = url.searchParams.get('error_description') || url.searchParams.get('error')
     if (errDesc) {
       setAuthError(decodeURIComponent(errDesc.replace(/\+/g, ' ')))
-      window.history.replaceState({}, '', window.location.pathname)
+      url.searchParams.delete('error')
+      url.searchParams.delete('error_description')
+      window.history.replaceState({}, '', url.toString())
+      setSession(null)
+      return
     }
 
+    // Let Supabase handle the code param from PKCE callback
     supabase.auth.getSession().then(({ data, error }) => {
-      if (error) setAuthError(error.message)
-      setSession(data.session ?? null)
+      if (error) {
+        setAuthError(error.message)
+        setSession(null)
+      } else {
+        setSession(data.session ?? null)
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      if (event === 'SIGNED_IN') { setAuthError(null); setSession(s) }
-      if (event === 'SIGNED_OUT') setSession(null)
+      if (event === 'SIGNED_IN')  { setAuthError(null); setSession(s) }
+      if (event === 'SIGNED_OUT') { setSession(null) }
+      if (event === 'TOKEN_REFRESHED') { setSession(s) }
     })
 
     return () => subscription.unsubscribe()
@@ -120,18 +130,18 @@ function LoginPage({ externalError }) {
 
   const handleMicrosoftLogin = async () => {
     setMsLoading(true); setError(null)
+    // Clear any stale PKCE state from localStorage before starting
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('supabase') || k.includes('pkce') || k.includes('code_verifier')) {
+        localStorage.removeItem(k)
+      }
+    })
     try {
-      // PKCE flow: Supabase handles code exchange at its own callback URL,
-      // then redirects to our app with the session already established
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'azure',
         options: {
           scopes: 'openid email profile',
           redirectTo: 'https://coffee-finance-requester.vercel.app',
-          queryParams: {
-            response_type: 'code',
-            response_mode: 'query',
-          },
         },
       })
       if (error) throw error
