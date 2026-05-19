@@ -8,6 +8,7 @@ export const supabase = createClient(
       detectSessionInUrl: true,
       persistSession: true,
       autoRefreshToken: true,
+      flowType: 'implicit',  // Use implicit flow instead of PKCE for SPA OAuth
     }
   }
 )
