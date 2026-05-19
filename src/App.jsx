@@ -27,7 +27,9 @@ export default function App() {
   const user = {
     id:    session.user.id,
     email: session.user.email,
-    name:  session.user.user_metadata?.full_name || session.user.email,
+    name:  session.user.user_metadata?.full_name
+        || session.user.user_metadata?.name
+        || session.user.email,
   }
 
   return (
@@ -51,15 +53,15 @@ export default function App() {
 }
 
 function Header({ user }) {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const initials = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
-  const isActive = p => location.pathname === p
+  const navigate   = useNavigate()
+  const location   = useLocation()
+  const initials   = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
+  const isActive   = p => location.pathname === p
+  const isMicrosoft = user.email?.endsWith('@fgcsg.com') // visual indicator only
 
   return (
     <header style={{ background:'var(--primary)', position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(46,45,156,.3)' }}>
       <div style={{ maxWidth:1000, margin:'0 auto', padding:'0 24px', height:60, display:'flex', alignItems:'center', gap:20 }}>
-        {/* Logo block */}
         <div style={{ display:'flex', alignItems:'center', gap:14, cursor:'pointer' }} onClick={() => navigate('/')}>
           <img src={apiLogo} alt="Coffee Finance" style={{ height:36, width:36, objectFit:'contain', borderRadius:8, background:'rgba(255,255,255,.1)' }} />
           <div style={{ width:1, height:28, background:'rgba(255,255,255,.2)' }} />
@@ -81,8 +83,11 @@ function Header({ user }) {
             <div style={{ color:'#fff', fontSize:12, fontWeight:600 }}>{user.name}</div>
             <div style={{ color:'var(--accent)', fontSize:10 }}>{user.email}</div>
           </div>
-          <button className="btn btn-ghost btn-sm" style={{ color:'rgba(255,255,255,.7)', borderColor:'rgba(255,255,255,.2)', marginLeft:8 }}
-            onClick={() => supabase.auth.signOut()}>Sign Out</button>
+          <button className="btn btn-ghost btn-sm"
+            style={{ color:'rgba(255,255,255,.7)', borderColor:'rgba(255,255,255,.2)', marginLeft:8 }}
+            onClick={() => supabase.auth.signOut()}>
+            Sign Out
+          </button>
         </div>
       </div>
     </header>
@@ -94,8 +99,34 @@ function LoginPage() {
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [loading,  setLoading]  = useState(false)
+  const [msLoading,setMsLoading]= useState(false)
   const [message,  setMessage]  = useState(null)
   const [error,    setError]    = useState(null)
+
+  // Handle OAuth redirect on page load
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash && hash.includes('access_token')) {
+      supabase.auth.getSession() // Supabase handles the token automatically
+    }
+  }, [])
+
+  const handleMicrosoftLogin = async () => {
+    setMsLoading(true); setError(null)
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'azure',
+        options: {
+          scopes: 'email profile openid',
+          redirectTo: window.location.origin,
+        },
+      })
+      if (error) throw error
+    } catch(e) {
+      setError(e.message)
+      setMsLoading(false)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -136,6 +167,39 @@ function LoginPage() {
         {error   && <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:14 }}>⚠️ {error}</div>}
         {message && <div style={{ background:'#D1FAE5', color:'#059669', borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:14 }}>✅ {message}</div>}
 
+        {mode === 'login' && (
+          <>
+            {/* Microsoft SSO button */}
+            <button
+              onClick={handleMicrosoftLogin}
+              disabled={msLoading}
+              style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor:'pointer', marginBottom:16, transition:'background .15s' }}
+              onMouseOver={e => e.currentTarget.style.background='#F9FAFB'}
+              onMouseOut={e  => e.currentTarget.style.background='#fff'}
+            >
+              {msLoading
+                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting…</>
+                : <>
+                    <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+                      <rect x="1"  y="1"  width="9" height="9" fill="#f25022"/>
+                      <rect x="11" y="1"  width="9" height="9" fill="#7fba00"/>
+                      <rect x="1"  y="11" width="9" height="9" fill="#00a4ef"/>
+                      <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                    </svg>
+                    Sign in with Microsoft 365
+                  </>
+              }
+            </button>
+
+            {/* Divider */}
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+              <div style={{ flex:1, height:1, background:'#E5E7EB' }} />
+              <span style={{ fontSize:12, color:'#9CA3AF', fontWeight:500 }}>or sign in with email</span>
+              <div style={{ flex:1, height:1, background:'#E5E7EB' }} />
+            </div>
+          </>
+        )}
+
         <form onSubmit={handleSubmit} style={{ display:'flex', flexDirection:'column', gap:12 }}>
           <div>
             <label style={{ display:'block', fontSize:12, fontWeight:600, marginBottom:5, color:'#1F2937' }}>Email</label>
@@ -148,25 +212,32 @@ function LoginPage() {
             </div>
           )}
           <button type="submit" className="btn btn-primary" style={{ width:'100%', justifyContent:'center', marginTop:4 }} disabled={loading}>
-            {loading ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</> :
-              mode === 'login' ? 'Sign In →' : 'Send Reset Email →'}
+            {loading
+              ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</>
+              : mode === 'login' ? 'Sign In with Email →' : 'Send Reset Email →'}
           </button>
         </form>
 
-        <div style={{ marginTop:16, textAlign:'center', fontSize:12, color:'#6B7280' }}>
-          {mode === 'login' ? (
-            <button onClick={()=>{setMode('forgot');setError(null);setMessage(null)}} style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
+        {mode === 'login' && (
+          <div style={{ marginTop:14, textAlign:'center', fontSize:12, color:'#6B7280' }}>
+            <button onClick={()=>{setMode('forgot');setError(null);setMessage(null)}}
+              style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
               Forgot password?
             </button>
-          ) : (
-            <button onClick={()=>{setMode('login');setError(null);setMessage(null)}} style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
+          </div>
+        )}
+        {mode === 'forgot' && (
+          <div style={{ marginTop:14, textAlign:'center', fontSize:12, color:'#6B7280' }}>
+            <button onClick={()=>{setMode('login');setError(null);setMessage(null)}}
+              style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
               ← Back to Sign In
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         <div style={{ marginTop:20, padding:'12px 14px', background:'#F5F6FC', borderRadius:8, borderLeft:'3px solid #6E8DE0', fontSize:12, color:'#6B7280', lineHeight:1.6 }}>
-          🔒 <strong>Invitation only.</strong> Access is granted by Felicity Global Capital. Contact your FGC representative if you need an account.
+          🔒 <strong>FGC staff</strong> — use Microsoft 365 above.<br/>
+          <strong>Coffee Finance staff</strong> — use email/password. Access granted by FGC.
         </div>
       </div>
     </div>
