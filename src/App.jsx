@@ -9,21 +9,32 @@ import fgcLogo from './assets/logo_color.svg'
 
 export default function App() {
   const [session, setSession] = useState(undefined)
+  const [authError, setAuthError] = useState(null)
 
   useEffect(() => {
-    // Handle OAuth callback — Supabase parses the URL hash/code automatically
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
+    // Check for error in URL hash (OAuth failure)
+    const hash = window.location.hash
+    if (hash.includes('error=')) {
+      const params = new URLSearchParams(hash.replace('#', ''))
+      const desc = params.get('error_description') || params.get('error') || 'Unknown auth error'
+      setAuthError(decodeURIComponent(desc.replace(/\+/g, ' ')))
+      setSession(null)
+      return
+    }
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) setAuthError(error.message)
+      setSession(data.session ?? null)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      setSession(s)
+      if (event === 'SIGNED_IN') setAuthError(null)
+      setSession(s ?? null)
     })
 
     return () => subscription.unsubscribe()
   }, [])
 
-  // Still resolving session
   if (session === undefined) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
       <div className="spinner spinner-lg" />
@@ -31,7 +42,7 @@ export default function App() {
     </div>
   )
 
-  if (!session) return <BrowserRouter><LoginPage /></BrowserRouter>
+  if (!session) return <BrowserRouter><LoginPage externalError={authError} /></BrowserRouter>
 
   const user = {
     id:    session.user.id,
@@ -99,14 +110,19 @@ function Header({ user }) {
   )
 }
 
-function LoginPage() {
+function LoginPage({ externalError }) {
   const [mode,      setMode]      = useState('login')
   const [email,     setEmail]     = useState('')
   const [password,  setPassword]  = useState('')
   const [loading,   setLoading]   = useState(false)
   const [msLoading, setMsLoading] = useState(false)
   const [message,   setMessage]   = useState(null)
-  const [error,     setError]     = useState(null)
+  const [error,     setError]     = useState(externalError || null)
+
+  // Show any OAuth error passed from parent
+  useEffect(() => {
+    if (externalError) setError(externalError)
+  }, [externalError])
 
   const handleMicrosoftLogin = async () => {
     setMsLoading(true); setError(null)
@@ -119,7 +135,6 @@ function LoginPage() {
         },
       })
       if (error) throw error
-      // Browser redirects — no further code runs
     } catch(e) {
       setError(e.message)
       setMsLoading(false)
@@ -161,17 +176,21 @@ function LoginPage() {
           {mode === 'login' ? 'Submit and track approval requests with FGC' : 'Enter your email to reset your password'}
         </p>
 
-        {error   && <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:14 }}>⚠️ {error}</div>}
+        {error && (
+          <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:12, marginBottom:14, wordBreak:'break-word' }}>
+            ⚠️ {error}
+          </div>
+        )}
         {message && <div style={{ background:'#D1FAE5', color:'#059669', borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:14 }}>✅ {message}</div>}
 
         {mode === 'login' && (
           <>
             <button onClick={handleMicrosoftLogin} disabled={msLoading}
-              style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor:'pointer', marginBottom:16, transition:'background .15s' }}
+              style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor:'pointer', marginBottom:16 }}
               onMouseOver={e => e.currentTarget.style.background='#F9FAFB'}
               onMouseOut={e  => e.currentTarget.style.background='#fff'}>
               {msLoading
-                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting to Microsoft…</>
+                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting…</>
                 : <>
                     <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
                       <rect x="1"  y="1"  width="9" height="9" fill="#f25022"/>
@@ -182,7 +201,6 @@ function LoginPage() {
                     Sign in with Microsoft 365
                   </>}
             </button>
-
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
               <div style={{ flex:1, height:1, background:'#E5E7EB' }} />
               <span style={{ fontSize:12, color:'#9CA3AF', fontWeight:500 }}>or sign in with email</span>
@@ -209,7 +227,7 @@ function LoginPage() {
         </form>
 
         {mode === 'login' && (
-          <div style={{ marginTop:14, textAlign:'center', fontSize:12, color:'#6B7280' }}>
+          <div style={{ marginTop:14, textAlign:'center', fontSize:12 }}>
             <button onClick={()=>{setMode('forgot');setError(null);setMessage(null)}}
               style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
               Forgot password?
@@ -217,7 +235,7 @@ function LoginPage() {
           </div>
         )}
         {mode === 'forgot' && (
-          <div style={{ marginTop:14, textAlign:'center', fontSize:12, color:'#6B7280' }}>
+          <div style={{ marginTop:14, textAlign:'center', fontSize:12 }}>
             <button onClick={()=>{setMode('login');setError(null);setMessage(null)}}
               style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
               ← Back to Sign In
@@ -227,7 +245,7 @@ function LoginPage() {
 
         <div style={{ marginTop:20, padding:'12px 14px', background:'#F5F6FC', borderRadius:8, borderLeft:'3px solid #6E8DE0', fontSize:12, color:'#6B7280', lineHeight:1.6 }}>
           🔒 <strong>FGC staff</strong> — use Microsoft 365 above.<br/>
-          <strong>Coffee Finance staff</strong> — use email/password. Access granted by FGC.
+          <strong>Coffee Finance staff</strong> — use email/password.
         </div>
       </div>
     </div>
