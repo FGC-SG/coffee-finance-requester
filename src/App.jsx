@@ -11,14 +11,23 @@ export default function App() {
   const [session, setSession] = useState(undefined)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    // Handle OAuth callback — Supabase parses the URL hash/code automatically
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s)
+    })
+
     return () => subscription.unsubscribe()
   }, [])
 
+  // Still resolving session
   if (session === undefined) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
       <div className="spinner spinner-lg" />
+      <p style={{ fontSize:13, color:'var(--muted)' }}>Signing you in…</p>
     </div>
   )
 
@@ -29,6 +38,7 @@ export default function App() {
     email: session.user.email,
     name:  session.user.user_metadata?.full_name
         || session.user.user_metadata?.name
+        || session.user.user_metadata?.preferred_username
         || session.user.email,
   }
 
@@ -53,11 +63,10 @@ export default function App() {
 }
 
 function Header({ user }) {
-  const navigate   = useNavigate()
-  const location   = useLocation()
-  const initials   = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
-  const isActive   = p => location.pathname === p
-  const isMicrosoft = user.email?.endsWith('@fgcsg.com') // visual indicator only
+  const navigate = useNavigate()
+  const location = useLocation()
+  const initials = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
+  const isActive = p => location.pathname === p
 
   return (
     <header style={{ background:'var(--primary)', position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(46,45,156,.3)' }}>
@@ -67,7 +76,6 @@ function Header({ user }) {
           <div style={{ width:1, height:28, background:'rgba(255,255,255,.2)' }} />
           <img src={fgcLogo} alt="Felicity Global Capital" style={{ height:18, objectFit:'contain', filter:'brightness(0) invert(1)', opacity:.9 }} />
         </div>
-
         <nav style={{ display:'flex', gap:4, flex:1, marginLeft:12 }}>
           {[['/', 'My Requests'], ['/new', '+ New Request']].map(([path, label]) => (
             <button key={path} onClick={() => navigate(path)}
@@ -76,7 +84,6 @@ function Header({ user }) {
             </button>
           ))}
         </nav>
-
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <div style={{ width:30, height:30, borderRadius:'50%', background:'rgba(110,141,224,.35)', color:'#fff', fontWeight:700, fontSize:12, display:'flex', alignItems:'center', justifyContent:'center', textTransform:'uppercase' }}>{initials}</div>
           <div>
@@ -85,9 +92,7 @@ function Header({ user }) {
           </div>
           <button className="btn btn-ghost btn-sm"
             style={{ color:'rgba(255,255,255,.7)', borderColor:'rgba(255,255,255,.2)', marginLeft:8 }}
-            onClick={() => supabase.auth.signOut()}>
-            Sign Out
-          </button>
+            onClick={() => supabase.auth.signOut()}>Sign Out</button>
         </div>
       </div>
     </header>
@@ -95,21 +100,13 @@ function Header({ user }) {
 }
 
 function LoginPage() {
-  const [mode,     setMode]     = useState('login')
-  const [email,    setEmail]    = useState('')
-  const [password, setPassword] = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const [msLoading,setMsLoading]= useState(false)
-  const [message,  setMessage]  = useState(null)
-  const [error,    setError]    = useState(null)
-
-  // Handle OAuth redirect on page load
-  useEffect(() => {
-    const hash = window.location.hash
-    if (hash && hash.includes('access_token')) {
-      supabase.auth.getSession() // Supabase handles the token automatically
-    }
-  }, [])
+  const [mode,      setMode]      = useState('login')
+  const [email,     setEmail]     = useState('')
+  const [password,  setPassword]  = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [msLoading, setMsLoading] = useState(false)
+  const [message,   setMessage]   = useState(null)
+  const [error,     setError]     = useState(null)
 
   const handleMicrosoftLogin = async () => {
     setMsLoading(true); setError(null)
@@ -117,11 +114,12 @@ function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'azure',
         options: {
-          scopes: 'email profile openid',
-          redirectTo: window.location.origin,
+          scopes: 'openid email profile',
+          redirectTo: 'https://coffee-finance-requester.vercel.app',
         },
       })
       if (error) throw error
+      // Browser redirects — no further code runs
     } catch(e) {
       setError(e.message)
       setMsLoading(false)
@@ -148,7 +146,6 @@ function LoginPage() {
     <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg,#2E2D9C 0%,#1a1960 40%,#0d0c4a 100%)', padding:24 }}>
       <div style={{ background:'#fff', borderRadius:20, padding:'44px 40px', maxWidth:420, width:'100%', boxShadow:'0 24px 80px rgba(0,0,0,.3)' }}>
 
-        {/* Dual logo */}
         <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:16, marginBottom:24 }}>
           <img src={apiLogo} alt="Coffee Finance" style={{ height:52, width:52, objectFit:'contain', borderRadius:12, boxShadow:'0 2px 8px rgba(46,45,156,.15)' }} />
           <div style={{ width:1, height:40, background:'#D1D5F0' }} />
@@ -169,16 +166,12 @@ function LoginPage() {
 
         {mode === 'login' && (
           <>
-            {/* Microsoft SSO button */}
-            <button
-              onClick={handleMicrosoftLogin}
-              disabled={msLoading}
+            <button onClick={handleMicrosoftLogin} disabled={msLoading}
               style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor:'pointer', marginBottom:16, transition:'background .15s' }}
               onMouseOver={e => e.currentTarget.style.background='#F9FAFB'}
-              onMouseOut={e  => e.currentTarget.style.background='#fff'}
-            >
+              onMouseOut={e  => e.currentTarget.style.background='#fff'}>
               {msLoading
-                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting…</>
+                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting to Microsoft…</>
                 : <>
                     <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
                       <rect x="1"  y="1"  width="9" height="9" fill="#f25022"/>
@@ -187,11 +180,9 @@ function LoginPage() {
                       <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
                     </svg>
                     Sign in with Microsoft 365
-                  </>
-              }
+                  </>}
             </button>
 
-            {/* Divider */}
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
               <div style={{ flex:1, height:1, background:'#E5E7EB' }} />
               <span style={{ fontSize:12, color:'#9CA3AF', fontWeight:500 }}>or sign in with email</span>
@@ -212,9 +203,8 @@ function LoginPage() {
             </div>
           )}
           <button type="submit" className="btn btn-primary" style={{ width:'100%', justifyContent:'center', marginTop:4 }} disabled={loading}>
-            {loading
-              ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</>
-              : mode === 'login' ? 'Sign In with Email →' : 'Send Reset Email →'}
+            {loading ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</> :
+              mode === 'login' ? 'Sign In with Email →' : 'Send Reset Email →'}
           </button>
         </form>
 
