@@ -8,18 +8,16 @@ import apiLogo from './assets/APILogo.avif'
 import fgcLogo from './assets/logo_color.svg'
 
 export default function App() {
-  const [session, setSession] = useState(undefined)
+  const [session,   setSession]   = useState(undefined)
   const [authError, setAuthError] = useState(null)
 
   useEffect(() => {
-    // Check for error in URL hash (OAuth failure)
-    const hash = window.location.hash
-    if (hash.includes('error=')) {
-      const params = new URLSearchParams(hash.replace('#', ''))
-      const desc = params.get('error_description') || params.get('error') || 'Unknown auth error'
-      setAuthError(decodeURIComponent(desc.replace(/\+/g, ' ')))
-      setSession(null)
-      return
+    // Check for error in URL params (PKCE flow returns errors as query params)
+    const params = new URLSearchParams(window.location.search)
+    const errDesc = params.get('error_description') || params.get('error')
+    if (errDesc) {
+      setAuthError(decodeURIComponent(errDesc.replace(/\+/g, ' ')))
+      window.history.replaceState({}, '', window.location.pathname)
     }
 
     supabase.auth.getSession().then(({ data, error }) => {
@@ -28,8 +26,8 @@ export default function App() {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      if (event === 'SIGNED_IN') setAuthError(null)
-      setSession(s ?? null)
+      if (event === 'SIGNED_IN') { setAuthError(null); setSession(s) }
+      if (event === 'SIGNED_OUT') setSession(null)
     })
 
     return () => subscription.unsubscribe()
@@ -78,7 +76,6 @@ function Header({ user }) {
   const location = useLocation()
   const initials = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
   const isActive = p => location.pathname === p
-
   return (
     <header style={{ background:'var(--primary)', position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(46,45,156,.3)' }}>
       <div style={{ maxWidth:1000, margin:'0 auto', padding:'0 24px', height:60, display:'flex', alignItems:'center', gap:20 }}>
@@ -117,21 +114,24 @@ function LoginPage({ externalError }) {
   const [loading,   setLoading]   = useState(false)
   const [msLoading, setMsLoading] = useState(false)
   const [message,   setMessage]   = useState(null)
-  const [error,     setError]     = useState(externalError || null)
+  const [error,     setError]     = useState(null)
 
-  // Show any OAuth error passed from parent
-  useEffect(() => {
-    if (externalError) setError(externalError)
-  }, [externalError])
+  useEffect(() => { if (externalError) setError(externalError) }, [externalError])
 
   const handleMicrosoftLogin = async () => {
     setMsLoading(true); setError(null)
     try {
+      // PKCE flow: Supabase handles code exchange at its own callback URL,
+      // then redirects to our app with the session already established
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'azure',
         options: {
           scopes: 'openid email profile',
           redirectTo: 'https://coffee-finance-requester.vercel.app',
+          queryParams: {
+            response_type: 'code',
+            response_mode: 'query',
+          },
         },
       })
       if (error) throw error
@@ -166,15 +166,10 @@ function LoginPage({ externalError }) {
           <div style={{ width:1, height:40, background:'#D1D5F0' }} />
           <img src={fgcLogo} alt="Felicity Global Capital" style={{ height:20, objectFit:'contain' }} />
         </div>
-
         <div style={{ height:2, background:'linear-gradient(90deg,transparent,#6E8DE0 30%,#2E2D9C 50%,#6E8DE0 70%,transparent)', marginBottom:24 }} />
 
-        <h2 style={{ fontSize:18, fontWeight:800, color:'#1F2937', marginBottom:4, textAlign:'center' }}>
-          {mode === 'login' ? 'Requester Portal' : 'Reset Password'}
-        </h2>
-        <p style={{ fontSize:12, color:'#6B7280', textAlign:'center', marginBottom:20 }}>
-          {mode === 'login' ? 'Submit and track approval requests with FGC' : 'Enter your email to reset your password'}
-        </p>
+        <h2 style={{ fontSize:18, fontWeight:800, color:'#1F2937', marginBottom:4, textAlign:'center' }}>Requester Portal</h2>
+        <p style={{ fontSize:12, color:'#6B7280', textAlign:'center', marginBottom:20 }}>Submit and track approval requests with FGC</p>
 
         {error && (
           <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:12, marginBottom:14, wordBreak:'break-word' }}>
@@ -221,27 +216,15 @@ function LoginPage({ externalError }) {
             </div>
           )}
           <button type="submit" className="btn btn-primary" style={{ width:'100%', justifyContent:'center', marginTop:4 }} disabled={loading}>
-            {loading ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</> :
-              mode === 'login' ? 'Sign In with Email →' : 'Send Reset Email →'}
+            {loading ? <><div className="spinner" style={{ width:14, height:14, borderWidth:2 }}/> Loading…</> : 'Sign In with Email →'}
           </button>
         </form>
 
-        {mode === 'login' && (
-          <div style={{ marginTop:14, textAlign:'center', fontSize:12 }}>
-            <button onClick={()=>{setMode('forgot');setError(null);setMessage(null)}}
-              style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
-              Forgot password?
-            </button>
-          </div>
-        )}
-        {mode === 'forgot' && (
-          <div style={{ marginTop:14, textAlign:'center', fontSize:12 }}>
-            <button onClick={()=>{setMode('login');setError(null);setMessage(null)}}
-              style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>
-              ← Back to Sign In
-            </button>
-          </div>
-        )}
+        <div style={{ marginTop:14, textAlign:'center', fontSize:12 }}>
+          {mode === 'login'
+            ? <button onClick={()=>{setMode('forgot');setError(null)}} style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>Forgot password?</button>
+            : <button onClick={()=>{setMode('login');setError(null)}} style={{ background:'none', border:'none', color:'#2E2D9C', fontWeight:700, cursor:'pointer' }}>← Back to Sign In</button>}
+        </div>
 
         <div style={{ marginTop:20, padding:'12px 14px', background:'#F5F6FC', borderRadius:8, borderLeft:'3px solid #6E8DE0', fontSize:12, color:'#6B7280', lineHeight:1.6 }}>
           🔒 <strong>FGC staff</strong> — use Microsoft 365 above.<br/>
