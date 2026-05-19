@@ -32,7 +32,6 @@ function normalizeRequest(r) {
   }
 }
 
-/** Get current user's own requests */
 export async function getRequests() {
   const { data, error } = await supabase
     .from('requests')
@@ -42,7 +41,6 @@ export async function getRequests() {
   return (data || []).map(normalizeRequest)
 }
 
-/** Get ALL requests across all users */
 export async function getAllRequests() {
   const { data, error } = await supabase
     .from('requests')
@@ -62,20 +60,19 @@ export async function getRequest(id) {
   return normalizeRequest(data)
 }
 
-/** Create a new request — works for both MSAL and Supabase users */
 export async function createRequest({ title, bodyMessage, approvers, approvalType, user }) {
-  // For MSAL users we don't have a Supabase session — use anon key with user details embedded
+  if (!user?.email) throw new Error('User not authenticated')
+
   const { data: { session } } = await supabase.auth.getSession()
 
   const requestData = {
     title,
     body_message:    bodyMessage,
     requester_email: user.email,
-    requester_name:  user.name,
+    requester_name:  user.name || user.email,
     approvers_json:  JSON.stringify(approvers),
     approval_type:   approvalType,
-    // Only set requester_id if we have a Supabase session
-    ...(session ? { requester_id: session.user.id } : {}),
+    ...(session?.user?.id ? { requester_id: session.user.id } : {}),
   }
 
   const { data: request, error: reqErr } = await supabase

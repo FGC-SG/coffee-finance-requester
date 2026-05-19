@@ -44,7 +44,7 @@ export default function NewRequest({ token, user }) {
       }))
       const created = await createRequest({
         title: title.trim(), bodyMessage: bodyMessage.trim(),
-        approvalType, approvers: validApprovers,
+        approvalType, approvers: validApprovers, user,
       })
       showToast('Request submitted! FGC team has been notified.')
       setTimeout(() => navigate(`/request/${created.id}`), 1200)
