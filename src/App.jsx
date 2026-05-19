@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { useMsal, MsalProvider } from '@azure/msal-react'
+import { InteractionStatus } from '@azure/msal-browser'
+import { loginRequest } from './authConfig.js'
 import { supabase } from './supabaseClient.js'
 import Dashboard     from './components/Dashboard.jsx'
 import NewRequest    from './components/NewRequest.jsx'
@@ -7,64 +10,68 @@ import RequestStatus from './components/RequestStatus.jsx'
 import apiLogo from './assets/APILogo.avif'
 import fgcLogo from './assets/logo_color.svg'
 
+// Dual-auth: supports both MSAL (FGC M365) and Supabase (email/password)
 export default function App() {
-  const [session,   setSession]   = useState(undefined)
-  const [authError, setAuthError] = useState(null)
+  const [supaSession, setSupaSession] = useState(undefined)
 
   useEffect(() => {
-    // Detect error query params from OAuth redirect
-    const url = new URL(window.location.href)
-    const errDesc = url.searchParams.get('error_description') || url.searchParams.get('error')
-    if (errDesc) {
-      setAuthError(decodeURIComponent(errDesc.replace(/\+/g, ' ')))
-      url.searchParams.delete('error')
-      url.searchParams.delete('error_description')
-      window.history.replaceState({}, '', url.toString())
-      setSession(null)
-      return
-    }
-
-    // Let Supabase handle the code param from PKCE callback
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (error) {
-        setAuthError(error.message)
-        setSession(null)
-      } else {
-        setSession(data.session ?? null)
-      }
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      if (event === 'SIGNED_IN')  { setAuthError(null); setSession(s) }
-      if (event === 'SIGNED_OUT') { setSession(null) }
-      if (event === 'TOKEN_REFRESHED') { setSession(s) }
-    })
-
+    supabase.auth.getSession().then(({ data }) => setSupaSession(data.session ?? null))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, s) => setSupaSession(s ?? null))
     return () => subscription.unsubscribe()
   }, [])
 
-  if (session === undefined) return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
-      <div className="spinner spinner-lg" />
-      <p style={{ fontSize:13, color:'var(--muted)' }}>Signing you in…</p>
-    </div>
-  )
+  return <AppInner supaSession={supaSession} setSupaSession={setSupaSession} />
+}
 
-  if (!session) return <BrowserRouter><LoginPage externalError={authError} /></BrowserRouter>
+function AppInner({ supaSession, setSupaSession }) {
+  const { instance, accounts, inProgress } = useMsal()
 
-  const user = {
-    id:    session.user.id,
-    email: session.user.email,
-    name:  session.user.user_metadata?.full_name
-        || session.user.user_metadata?.name
-        || session.user.user_metadata?.preferred_username
-        || session.user.email,
+  // MSAL user (FGC M365)
+  const msalUser = accounts.length > 0 ? {
+    id:    accounts[0].homeAccountId,
+    email: accounts[0].username,
+    name:  accounts[0].name || accounts[0].username,
+    via:   'msal',
+  } : null
+
+  // Supabase user (email/password)
+  const supaUser = supaSession ? {
+    id:    supaSession.user.id,
+    email: supaSession.user.email,
+    name:  supaSession.user.user_metadata?.full_name || supaSession.user.email,
+    via:   'supabase',
+  } : null
+
+  const user = msalUser || supaUser
+
+  // Still loading
+  if (supaSession === undefined || (inProgress !== InteractionStatus.None && !user)) {
+    return (
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
+        <div className="spinner spinner-lg" />
+        <p style={{ fontSize:13, color:'var(--muted)' }}>Loading…</p>
+      </div>
+    )
   }
+
+  const handleSignOut = async () => {
+    if (msalUser) {
+      await instance.logoutPopup()
+    } else {
+      await supabase.auth.signOut()
+    }
+  }
+
+  if (!user) return (
+    <BrowserRouter>
+      <LoginPage onSupaSession={setSupaSession} />
+    </BrowserRouter>
+  )
 
   return (
     <BrowserRouter>
       <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column' }}>
-        <Header user={user} />
+        <Header user={user} onSignOut={handleSignOut} />
         <main style={{ flex:1 }}>
           <Routes>
             <Route path="/"            element={<Dashboard     user={user} />} />
@@ -81,7 +88,7 @@ export default function App() {
   )
 }
 
-function Header({ user }) {
+function Header({ user, onSignOut }) {
   const navigate = useNavigate()
   const location = useLocation()
   const initials = user.name?.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase() || '?'
@@ -103,6 +110,9 @@ function Header({ user }) {
           ))}
         </nav>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {user.via === 'msal' && (
+            <span style={{ fontSize:10, background:'rgba(255,255,255,.15)', color:'rgba(255,255,255,.8)', padding:'2px 8px', borderRadius:99, fontWeight:600 }}>FGC</span>
+          )}
           <div style={{ width:30, height:30, borderRadius:'50%', background:'rgba(110,141,224,.35)', color:'#fff', fontWeight:700, fontSize:12, display:'flex', alignItems:'center', justifyContent:'center', textTransform:'uppercase' }}>{initials}</div>
           <div>
             <div style={{ color:'#fff', fontSize:12, fontWeight:600 }}>{user.name}</div>
@@ -110,14 +120,15 @@ function Header({ user }) {
           </div>
           <button className="btn btn-ghost btn-sm"
             style={{ color:'rgba(255,255,255,.7)', borderColor:'rgba(255,255,255,.2)', marginLeft:8 }}
-            onClick={() => supabase.auth.signOut()}>Sign Out</button>
+            onClick={onSignOut}>Sign Out</button>
         </div>
       </div>
     </header>
   )
 }
 
-function LoginPage({ externalError }) {
+function LoginPage({ onSupaSession }) {
+  const { instance, inProgress } = useMsal()
   const [mode,      setMode]      = useState('login')
   const [email,     setEmail]     = useState('')
   const [password,  setPassword]  = useState('')
@@ -126,29 +137,16 @@ function LoginPage({ externalError }) {
   const [message,   setMessage]   = useState(null)
   const [error,     setError]     = useState(null)
 
-  useEffect(() => { if (externalError) setError(externalError) }, [externalError])
+  const busy = msLoading || inProgress !== InteractionStatus.None
 
   const handleMicrosoftLogin = async () => {
     setMsLoading(true); setError(null)
-    // Clear any stale PKCE state from localStorage before starting
-    Object.keys(localStorage).forEach(k => {
-      if (k.startsWith('supabase') || k.includes('pkce') || k.includes('code_verifier')) {
-        localStorage.removeItem(k)
-      }
-    })
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'azure',
-        options: {
-          scopes: 'openid email profile',
-          redirectTo: 'https://coffee-finance-requester.vercel.app',
-        },
-      })
-      if (error) throw error
+      await instance.loginPopup(loginRequest)
+      // MSAL handles session — App re-renders automatically via useMsal()
     } catch(e) {
-      setError(e.message)
-      setMsLoading(false)
-    }
+      if (e.errorCode !== 'user_cancelled') setError(e.message || 'Microsoft login failed')
+    } finally { setMsLoading(false) }
   }
 
   const handleSubmit = async (e) => {
@@ -156,8 +154,9 @@ function LoginPage({ externalError }) {
     setLoading(true); setError(null); setMessage(null)
     try {
       if (mode === 'login') {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
+        onSupaSession(data.session)
       } else {
         const { error } = await supabase.auth.resetPasswordForEmail(email)
         if (error) throw error
@@ -181,21 +180,17 @@ function LoginPage({ externalError }) {
         <h2 style={{ fontSize:18, fontWeight:800, color:'#1F2937', marginBottom:4, textAlign:'center' }}>Requester Portal</h2>
         <p style={{ fontSize:12, color:'#6B7280', textAlign:'center', marginBottom:20 }}>Submit and track approval requests with FGC</p>
 
-        {error && (
-          <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:12, marginBottom:14, wordBreak:'break-word' }}>
-            ⚠️ {error}
-          </div>
-        )}
+        {error   && <div style={{ background:'#FEE2E2', color:'#DC2626', borderRadius:8, padding:'10px 14px', fontSize:12, marginBottom:14, wordBreak:'break-word' }}>⚠️ {error}</div>}
         {message && <div style={{ background:'#D1FAE5', color:'#059669', borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:14 }}>✅ {message}</div>}
 
         {mode === 'login' && (
           <>
-            <button onClick={handleMicrosoftLogin} disabled={msLoading}
-              style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor:'pointer', marginBottom:16 }}
-              onMouseOver={e => e.currentTarget.style.background='#F9FAFB'}
-              onMouseOut={e  => e.currentTarget.style.background='#fff'}>
-              {msLoading
-                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Redirecting…</>
+            <button onClick={handleMicrosoftLogin} disabled={busy}
+              style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'11px 16px', border:'1.5px solid #D1D5DB', borderRadius:8, background:'#fff', fontFamily:'var(--font)', fontSize:14, fontWeight:600, color:'#1F2937', cursor: busy ? 'not-allowed' : 'pointer', marginBottom:16, opacity: busy ? 0.7 : 1 }}
+              onMouseOver={e => { if (!busy) e.currentTarget.style.background='#F9FAFB' }}
+              onMouseOut={e  => { e.currentTarget.style.background='#fff' }}>
+              {busy
+                ? <><div className="spinner" style={{ width:16, height:16, borderWidth:2, borderTopColor:'#2E2D9C' }} /> Signing in…</>
                 : <>
                     <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
                       <rect x="1"  y="1"  width="9" height="9" fill="#f25022"/>

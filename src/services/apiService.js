@@ -32,7 +32,7 @@ function normalizeRequest(r) {
   }
 }
 
-/** Get only the current user's own requests (RLS: requester_id = auth.uid()) */
+/** Get current user's own requests */
 export async function getRequests() {
   const { data, error } = await supabase
     .from('requests')
@@ -42,7 +42,7 @@ export async function getRequests() {
   return (data || []).map(normalizeRequest)
 }
 
-/** Get ALL requests across all requesters — for the "All Requests" tab */
+/** Get ALL requests across all users */
 export async function getAllRequests() {
   const { data, error } = await supabase
     .from('requests')
@@ -62,21 +62,25 @@ export async function getRequest(id) {
   return normalizeRequest(data)
 }
 
-export async function createRequest({ title, bodyMessage, approvers, approvalType }) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
+/** Create a new request — works for both MSAL and Supabase users */
+export async function createRequest({ title, bodyMessage, approvers, approvalType, user }) {
+  // For MSAL users we don't have a Supabase session — use anon key with user details embedded
+  const { data: { session } } = await supabase.auth.getSession()
+
+  const requestData = {
+    title,
+    body_message:    bodyMessage,
+    requester_email: user.email,
+    requester_name:  user.name,
+    approvers_json:  JSON.stringify(approvers),
+    approval_type:   approvalType,
+    // Only set requester_id if we have a Supabase session
+    ...(session ? { requester_id: session.user.id } : {}),
+  }
 
   const { data: request, error: reqErr } = await supabase
     .from('requests')
-    .insert({
-      title,
-      body_message:    bodyMessage,
-      requester_id:    user.id,
-      requester_email: user.email,
-      requester_name:  user.user_metadata?.full_name || user.email,
-      approvers_json:  JSON.stringify(approvers),
-      approval_type:   approvalType,
-    })
+    .insert(requestData)
     .select()
     .single()
 
@@ -96,7 +100,7 @@ export async function createRequest({ title, bodyMessage, approvers, approvalTyp
   fetch(NOTIFY_URL, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ type: 'new-request', request: normalizeRequest(request), requestId: request.id }),
+    body:    JSON.stringify({ type: 'new-request', requestId: request.id }),
   }).catch(() => {})
 
   return normalizeRequest(request)
